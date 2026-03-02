@@ -38,6 +38,17 @@ dotnet publish MbCnsTool.Cli\MbCnsTool.Cli.csproj -c Release -r win-x64 --self-c
 dotnet publish MbCnsTool.Wpf\MbCnsTool.Wpf.csproj -c Release -r win-x64 --self-contained false -o artifacts\publish-wpf
 ```
 
+## 便携包发布（方案1）
+
+```powershell
+dotnet build MbCnsTool.sln -c Release
+dotnet publish MbCnsTool.Wpf\MbCnsTool.Wpf.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:DebugType=None -p:DebugSymbols=false -o artifacts\publish-wpf-portable
+Compress-Archive -Path artifacts\publish-wpf-portable\* -DestinationPath artifacts\MbCnsTool.Wpf-win-x64-portable.zip -Force
+```
+
+- 对外分发文件：`artifacts/MbCnsTool.Wpf-win-x64-portable.zip`
+- 用户使用方式：解压后直接运行 `MbCnsTool.Wpf.exe`
+
 ## 仓库清理
 
 ```powershell
@@ -50,12 +61,12 @@ dotnet clean MbCnsTool.sln
 
 ```powershell
 dotnet run --project MbCnsTool.Cli\MbCnsTool.Cli.csproj -c Release -- `
-  --mod "E:\code\Mount & Blade II Mod\Enlisted" `
-  --output "E:\code\Mount & Blade II Mod\m&b-cns-tool\artifacts" `
+  --mod "D:\Bannerlord\Modules\Enlisted" `
+  --output ".\artifacts" `
   --mode external `
   --style "史诗叙事风" `
   --providers google_free,fallback `
-  --glossary "E:\code\Mount & Blade II Mod\m&b-cns-tool\glossary\default_glossary.txt"
+  --glossary ".\glossary\default_glossary.txt"
 ```
 
 ## 参数说明
@@ -70,25 +81,29 @@ dotnet run --project MbCnsTool.Cli\MbCnsTool.Cli.csproj -c Release -- `
 - `--cache`：缓存数据库路径，默认 `artifacts/cache/translation_cache.db`。
 - `--target`：目标语言，默认 `zh-CN`。
 
+## 开源协议
+
+本项目采用 `MIT License` 开源协议。
+
 ## 迁移策略
 
 无迁移，直接替换。
 
 ## GUI 启动（具体用法）
 
-- 环境要求：Windows + .NET 8 Runtime（当前发布为 `--self-contained false`）。
+- 环境要求：Windows（使用便携包方案时无需额外安装 .NET Runtime）。
 
 - 第一次使用（推荐）：
 
 ```powershell
 dotnet build MbCnsTool.sln -c Release
-dotnet publish MbCnsTool.Wpf\MbCnsTool.Wpf.csproj -c Release -r win-x64 --self-contained false -o artifacts\publish-wpf
+dotnet publish MbCnsTool.Wpf\MbCnsTool.Wpf.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:DebugType=None -p:DebugSymbols=false -o artifacts\publish-wpf-portable
 ```
 
 - 启动方式（命令行）：
 
 ```powershell
-artifacts\publish-wpf\MbCnsTool.Wpf.exe
+artifacts\publish-wpf-portable\MbCnsTool.Wpf.exe
 ```
 
 ## GUI 说明（当前版本）
