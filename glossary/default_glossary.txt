@@ -1,0 +1,8 @@
+# 骑砍2常用术语
+Denar=第纳尔
+Bannerlord=霸主
+Quartermaster=军需官
+Levy=征召兵
+Footman=步兵
+Serjeant=军士
+Man-at-Arms=披甲战士

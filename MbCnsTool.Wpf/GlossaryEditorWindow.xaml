@@ -1,0 +1,43 @@
+﻿<Window x:Class="MbCnsTool.Wpf.GlossaryEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="术语表编辑器"
+        Height="560"
+        Width="820"
+        Background="#F7F8FA"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock x:Name="PathTextBlock" Margin="0,0,0,6" Foreground="#6B7280" />
+        <TextBlock x:Name="TemplatePathTextBlock" Grid.Row="1" Margin="0,0,0,10" Foreground="#6B7280" />
+
+        <DataGrid x:Name="GlossaryDataGrid"
+                  Grid.Row="2"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="True"
+                  CanUserDeleteRows="True"
+                  IsReadOnly="False"
+                  SelectionUnit="FullRow"
+                  BorderBrush="#D8DCE3"
+                  BorderThickness="1">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="原文术语" Binding="{Binding Source, UpdateSourceTrigger=PropertyChanged}" Width="*" />
+                <DataGridTextColumn Header="译文术语" Binding="{Binding Target, UpdateSourceTrigger=PropertyChanged}" Width="*" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <StackPanel Grid.Row="3" Margin="0,10,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Width="100" Margin="0,0,8,0" Content="导入 JSON" Click="OnImportJsonClick" />
+            <Button Width="100" Margin="0,0,8,0" Content="打开模板" Click="OnOpenTemplateClick" />
+            <Button Width="100" Margin="0,0,8,0" Content="删除选中" Click="OnDeleteSelected" />
+            <Button Width="100" Margin="0,0,8,0" Content="保存" Click="OnSaveClick" />
+            <Button Width="100" Content="关闭" Click="OnCloseClick" />
+        </StackPanel>
+    </Grid>
+</Window>

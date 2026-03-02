@@ -1,0 +1,7 @@
+.ace-tool/
+artifacts/
+**/bin/
+**/obj/
+.vs/
+*.user
+*.suo
