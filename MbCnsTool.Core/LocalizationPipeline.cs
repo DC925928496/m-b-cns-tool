@@ -60,7 +60,7 @@ public sealed class LocalizationPipeline
             cancellationToken,
             progress);
         var normalizer = new LanguageMetadataNormalizer();
-        normalizer.Normalize(bundle.Documents);
+        normalizer.Normalize(bundle.Documents, options.TargetLanguage);
 
         progress?.Report("开始翻译 DLL 硬编码字符串。");
         var runtimeMap = await orchestrator.TranslateDllLiteralsAsync(

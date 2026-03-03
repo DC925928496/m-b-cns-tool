@@ -22,7 +22,8 @@ public sealed class GlossaryAutoTermServiceTests
             SourceText = "Quartermaster Quartermaster Quartermaster Quartermaster Quartermaster",
             Category = TextCategory.对话,
             KeyName = "text",
-            ApplyTranslation = _ => { }
+            ApplyTranslation = _ => { },
+            ReadCurrentText = () => "Quartermaster Quartermaster Quartermaster Quartermaster Quartermaster"
         };
 
         try
@@ -63,7 +64,8 @@ public sealed class GlossaryAutoTermServiceTests
             SourceText = "Mercenary Mercenary Mercenary Mercenary",
             Category = TextCategory.物品,
             KeyName = "name",
-            ApplyTranslation = _ => { }
+            ApplyTranslation = _ => { },
+            ReadCurrentText = () => "Mercenary Mercenary Mercenary Mercenary"
         };
 
         try

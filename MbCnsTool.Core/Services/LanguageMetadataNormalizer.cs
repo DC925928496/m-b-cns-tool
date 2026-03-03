@@ -11,8 +11,9 @@ public sealed class LanguageMetadataNormalizer
     /// <summary>
     /// 规范化文档中的语言标记。
     /// </summary>
-    public void Normalize(IReadOnlyList<SourceDocument> documents)
+    public void Normalize(IReadOnlyList<SourceDocument> documents, string targetLanguage)
     {
+        var metadata = ResolveMetadata(targetLanguage);
         foreach (var document in documents.OfType<XmlSourceDocument>())
         {
             var relativePath = document.RelativePath.Replace('\\', '/').ToLowerInvariant();
@@ -29,10 +30,11 @@ public sealed class LanguageMetadataNormalizer
                     continue;
                 }
 
-                root.SetAttributeValue("id", "Chinese (Simplified)");
-                root.SetAttributeValue("name", "简体中文");
-                root.SetAttributeValue("subtitle_extension", "CN");
-                root.SetAttributeValue("supported_iso", "zh,zh-CN");
+                root.SetAttributeValue("id", metadata.languageId);
+                root.SetAttributeValue("name", metadata.languageName);
+                root.SetAttributeValue("subtitle_extension", metadata.subtitleExtension);
+                root.SetAttributeValue("supported_iso", metadata.supportedIso);
+                root.SetAttributeValue("under_development", "false");
                 continue;
             }
 
@@ -40,9 +42,27 @@ public sealed class LanguageMetadataNormalizer
             {
                 if (tagNode.Attribute("language") is not null)
                 {
-                    tagNode.SetAttributeValue("language", "Chinese (Simplified)");
+                    tagNode.SetAttributeValue("language", metadata.languageId);
                 }
             }
         }
+    }
+
+    private static (string languageId, string languageName, string subtitleExtension, string supportedIso) ResolveMetadata(string targetLanguage)
+    {
+        if (targetLanguage.StartsWith("zh-TW", StringComparison.OrdinalIgnoreCase) ||
+            targetLanguage.StartsWith("zh-HK", StringComparison.OrdinalIgnoreCase))
+        {
+            return ("繁體中文", "繁體中文", "CNT", "zh,zh-TW,zh-HK");
+        }
+
+        if (targetLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase))
+        {
+            return ("简体中文", "简体中文", "CN", "zh,zh-CN");
+        }
+
+        var normalized = string.IsNullOrWhiteSpace(targetLanguage) ? "English" : targetLanguage.Trim();
+        var subtitle = normalized.Length >= 2 ? normalized[..2].ToUpperInvariant() : normalized.ToUpperInvariant();
+        return (normalized, normalized, subtitle, normalized);
     }
 }

@@ -57,4 +57,39 @@ public sealed class ModTextExtractorTests
             }
         }
     }
+
+    [Fact]
+    public async Task Extract_Should_Skip_AtPrefixed_Text_And_Parse_TranslationId()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mod-{Guid.NewGuid():N}");
+        var moduleRoot = Path.Combine(root, "DemoMod");
+        Directory.CreateDirectory(moduleRoot);
+        await File.WriteAllTextAsync(Path.Combine(moduleRoot, "SubModule.xml"), "<Module></Module>");
+        Directory.CreateDirectory(Path.Combine(moduleRoot, "ModuleData"));
+        await File.WriteAllTextAsync(
+            Path.Combine(moduleRoot, "ModuleData", "items.xml"),
+            """
+            <Items>
+              <Item id="demo_item" name="@item_key" text="{=demo_item_name}Iron Sword" />
+            </Items>
+            """);
+
+        try
+        {
+            var extractor = new ModTextExtractor(new TextClassifier(), new DllStringScanner());
+            var bundle = extractor.Extract(root);
+            var units = bundle.TextUnits.Where(unit => unit.RelativePath.EndsWith("items.xml", StringComparison.OrdinalIgnoreCase)).ToArray();
+
+            Assert.DoesNotContain(units, unit => unit.SourceText.StartsWith('@'));
+            var interfaceUnit = Assert.Single(units.Where(unit => unit.SourceText.Contains("{=demo_item_name}", StringComparison.Ordinal)));
+            Assert.Equal("demo_item_name", interfaceUnit.TranslationId);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
 }

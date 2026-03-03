@@ -38,9 +38,19 @@ public sealed class TextUnit
     public required string KeyName { get; init; }
 
     /// <summary>
+    /// 翻译接口 ID（如 {=item_name} 中的 item_name），无接口时为 null。
+    /// </summary>
+    public string? TranslationId { get; init; }
+
+    /// <summary>
     /// 回写译文动作。
     /// </summary>
     public required Action<string> ApplyTranslation { get; init; }
+
+    /// <summary>
+    /// 读取当前文本（用于打包阶段判断是否发生变更）。
+    /// </summary>
+    public required Func<string> ReadCurrentText { get; init; }
 
     /// <summary>
     /// 计算缓存键。

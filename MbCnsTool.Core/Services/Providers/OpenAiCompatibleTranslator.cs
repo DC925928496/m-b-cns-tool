@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using MbCnsTool.Core.Abstractions;
 using MbCnsTool.Core.Models;
@@ -12,6 +13,8 @@ namespace MbCnsTool.Core.Services.Providers;
 /// </summary>
 public sealed class OpenAiCompatibleTranslator : ITranslationProvider
 {
+    private const string UserAgent = "MbCnsTool/1.0";
+    private const int DefaultMaxTokens = 1024;
     private readonly HttpClient _httpClient;
     private readonly string _apiKey;
     private readonly string _baseUrl;
@@ -54,10 +57,13 @@ public sealed class OpenAiCompatibleTranslator : ITranslationProvider
         {
             using var message = new HttpRequestMessage(HttpMethod.Post, endpoint);
             message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            message.Headers.UserAgent.ParseAdd(UserAgent);
+            message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             message.Content = JsonContent.Create(new
             {
                 model = _model,
                 temperature = 0.1,
+                max_tokens = DefaultMaxTokens,
                 messages = new object[]
                 {
                     new { role = "system", content = systemPrompt },
@@ -79,8 +85,55 @@ public sealed class OpenAiCompatibleTranslator : ITranslationProvider
                 return (HttpStatusCode.InternalServerError, default(string));
             }
 
-            var content = choices[0].GetProperty("message").GetProperty("content").GetString();
-            return (response.StatusCode, content?.Trim());
+            var content = TryExtractMessageContent(choices[0]);
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return (HttpStatusCode.InternalServerError, default(string));
+            }
+
+            return (response.StatusCode, content.Trim());
         }, cancellationToken);
+    }
+
+    private static string? TryExtractMessageContent(JsonElement choiceElement)
+    {
+        if (!choiceElement.TryGetProperty("message", out var messageElement) ||
+            !messageElement.TryGetProperty("content", out var contentElement))
+        {
+            return null;
+        }
+
+        if (contentElement.ValueKind == JsonValueKind.String)
+        {
+            return contentElement.GetString();
+        }
+
+        if (contentElement.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        // 兼容部分网关返回 content 数组（例如 [{ "type":"output_text", "text":"..." }]）。
+        var builder = new StringBuilder();
+        foreach (var part in contentElement.EnumerateArray())
+        {
+            if (part.ValueKind == JsonValueKind.String)
+            {
+                builder.Append(part.GetString());
+                continue;
+            }
+
+            if (part.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (part.TryGetProperty("text", out var textElement) && textElement.ValueKind == JsonValueKind.String)
+            {
+                builder.Append(textElement.GetString());
+            }
+        }
+
+        return builder.Length > 0 ? builder.ToString() : null;
     }
 }

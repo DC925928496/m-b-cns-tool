@@ -112,7 +112,7 @@ public sealed class ModTextExtractor
             {
                 var key = attribute.Name.LocalName;
                 var source = attribute.Value.Trim();
-                if (!TextRules.IsCandidateKey(key) || !TextRules.IsTranslatableString(source))
+                if (!ShouldTranslateXmlAttribute(relativePath, element, key, source))
                 {
                     continue;
                 }
@@ -127,7 +127,9 @@ public sealed class ModTextExtractor
                     SourceText = source,
                     Category = _classifier.Classify(relativePath, key),
                     KeyName = key,
-                    ApplyTranslation = value => capturedAttribute.Value = value
+                    TranslationId = TextRules.ExtractTranslationId(source),
+                    ApplyTranslation = value => capturedAttribute.Value = value,
+                    ReadCurrentText = () => capturedAttribute.Value
                 });
             }
 
@@ -152,7 +154,9 @@ public sealed class ModTextExtractor
                 SourceText = directText,
                 Category = _classifier.Classify(relativePath, element.Name.LocalName),
                 KeyName = element.Name.LocalName,
-                ApplyTranslation = value => capturedElement.Value = value
+                TranslationId = TextRules.ExtractTranslationId(directText),
+                ApplyTranslation = value => capturedElement.Value = value,
+                ReadCurrentText = () => capturedElement.Value
             });
         }
     }
@@ -218,6 +222,7 @@ public sealed class ModTextExtractor
 
                 idCounter++;
                 var parent = node.Parent;
+                var currentText = source;
                 textUnits.Add(new TextUnit
                 {
                     Id = $"{relativePath}|json|{idCounter}",
@@ -226,7 +231,13 @@ public sealed class ModTextExtractor
                     SourceText = source,
                     Category = _classifier.Classify(relativePath, keyName),
                     KeyName = keyName,
-                    ApplyTranslation = translated => SetJsonValue(parent, node, translated)
+                    TranslationId = TextRules.ExtractTranslationId(source),
+                    ApplyTranslation = translated =>
+                    {
+                        currentText = translated;
+                        SetJsonValue(parent, node, translated);
+                    },
+                    ReadCurrentText = () => currentText
                 });
                 break;
         }
@@ -257,6 +268,38 @@ public sealed class ModTextExtractor
     private static bool LooksLikeSentence(string text)
     {
         return text.Contains(' ') || text.Contains('.') || text.Contains('!') || text.Contains('?');
+    }
+
+    private static bool ShouldTranslateXmlAttribute(string relativePath, XElement element, string key, string source)
+    {
+        if (!TextRules.IsTranslatableString(source))
+        {
+            return false;
+        }
+
+        if (TextRules.IsCandidateKey(key))
+        {
+            return true;
+        }
+
+        // name 字段中大量内容是内部标识符，默认不翻译；仅在可确定是可展示文本时放行。
+        if (!key.Equals("name", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (TextRules.ExtractTranslationId(source) is not null)
+        {
+            return true;
+        }
+
+        if (source.Any(char.IsWhiteSpace))
+        {
+            return true;
+        }
+
+        var path = relativePath.Replace('\\', '/').ToLowerInvariant();
+        return path.Contains("/languages/") && element.Name.LocalName.Equals("string", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildElementPath(XElement element)
