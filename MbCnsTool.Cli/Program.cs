@@ -15,19 +15,28 @@ public static class Program
     {
         try
         {
-            var options = ParseArguments(args);
+            var (options, packageStage) = ParseArguments(args);
             var pipeline = new LocalizationPipeline();
             var progress = new Progress<string>(message => Console.WriteLine($"[进度] {message}"));
-            var summary = await pipeline.RunAsync(options, CancellationToken.None, progress);
+            var summary = packageStage
+                ? await pipeline.RunPackageStageAsync(options, CancellationToken.None, progress)
+                : await pipeline.RunTranslationStageAsync(options, CancellationToken.None, progress);
 
-            Console.WriteLine("汉化执行完成。");
+            Console.WriteLine(summary.PackageCompleted ? "汉化打包完成。" : "翻译阶段完成，等待人工确认。");
             Console.WriteLine($"Mod根目录: {summary.ModuleRootPath}");
             Console.WriteLine($"输出目录: {summary.OutputPath}");
             Console.WriteLine($"文本总量: {summary.TotalTextCount}");
             Console.WriteLine($"缓存命中: {summary.CacheHitCount}");
             Console.WriteLine($"翻译调用: {summary.ProviderCallCount}");
             Console.WriteLine($"DLL字符串: {summary.DllLiteralCount}");
+            Console.WriteLine($"对比条目: {summary.ReviewEntryCount}");
+            Console.WriteLine($"对比文件: {summary.ReviewFilePath ?? "未生成"}");
             Console.WriteLine($"Runtime映射: {summary.RuntimeMapPath ?? "未生成"}");
+            if (!summary.PackageCompleted)
+            {
+                Console.WriteLine("请手动编辑对比文件后，使用 --finalize true 执行最终打包。");
+            }
+
             return 0;
         }
         catch (Exception exception)
@@ -37,7 +46,7 @@ public static class Program
         }
     }
 
-    private static TranslationRunOptions ParseArguments(string[] args)
+    private static (TranslationRunOptions options, bool packageStage) ParseArguments(string[] args)
     {
         var map = BuildArgumentMap(args);
         if (!map.TryGetValue("mod", out var modPath) || string.IsNullOrWhiteSpace(modPath))
@@ -67,6 +76,7 @@ public static class Program
             ? glossaryPath
             : Path.Combine(Environment.CurrentDirectory, "glossary", "default_glossary.txt");
         var cachePath = map.TryGetValue("cache", out var cacheDbPath) ? cacheDbPath : null;
+        var reviewPath = map.TryGetValue("review", out var reviewFilePath) ? reviewFilePath : null;
         var maxConcurrency = map.TryGetValue("concurrency", out var concurrencyText) &&
                              int.TryParse(concurrencyText, out var parsedConcurrency)
             ? parsedConcurrency
@@ -74,8 +84,9 @@ public static class Program
         var providers = map.TryGetValue("providers", out var providerChain) && !string.IsNullOrWhiteSpace(providerChain)
             ? providerChain.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
             : ["google_free", "fallback"];
+        var packageStage = map.TryGetValue("finalize", out var finalizeText) && IsTrueFlag(finalizeText);
 
-        return new TranslationRunOptions
+        return (new TranslationRunOptions
         {
             ModPath = modPath,
             OutputPath = outputPath,
@@ -84,9 +95,10 @@ public static class Program
             TargetLanguage = targetLanguage,
             GlossaryFilePath = glossary,
             CacheDbPath = cachePath,
+            ReviewFilePath = reviewPath,
             MaxConcurrency = maxConcurrency,
             ProviderChain = providers
-        };
+        }, packageStage);
     }
 
     private static Dictionary<string, string> BuildArgumentMap(string[] args)
@@ -119,5 +131,17 @@ public static class Program
         }
 
         return map;
+    }
+
+    private static bool IsTrueFlag(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return true;
+        }
+
+        return value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("yes", StringComparison.OrdinalIgnoreCase);
     }
 }

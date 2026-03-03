@@ -12,17 +12,19 @@ namespace MbCnsTool.Core;
 public sealed class LocalizationPipeline
 {
     /// <summary>
-    /// 执行翻译、回写与打包。
+    /// 执行翻译阶段（不打包）。
     /// </summary>
-    public async Task<TranslationSummary> RunAsync(
+    public async Task<TranslationSummary> RunTranslationStageAsync(
         TranslationRunOptions options,
         CancellationToken cancellationToken,
         IProgress<string>? progress = null)
     {
-        progress?.Report("开始扫描 Mod 文本和 DLL 字符串。");
+        progress?.Report("开始扫描语言文件并收集本地化引用（严格模式）。");
         var extractor = new ModTextExtractor(new TextClassifier(), new DllStringScanner());
         var bundle = extractor.Extract(options.ModPath);
-        progress?.Report($"扫描完成：文本条目 {bundle.TextUnits.Count}，DLL 字符串 {bundle.DllLiterals.Count}。");
+        progress?.Report($"扫描完成：语言条目 {bundle.TextUnits.Count}。");
+        var reviewService = new TranslationReviewService();
+        var reviewPath = options.ReviewFilePath ?? TranslationReviewService.ResolveDefaultPath(options.OutputPath, bundle.ModuleRootPath);
 
         using var httpClient = new HttpClient
         {
@@ -32,20 +34,16 @@ public sealed class LocalizationPipeline
         var providers = providerFactory.CreateAll().ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
         RegisterCustomProviderIfNeeded(options, providers, httpClient);
 
-        if (!string.IsNullOrWhiteSpace(options.GlossaryFilePath))
-        {
-            var autoAdded = await GlossaryAutoTermService.AppendFrequentTermsAsync(
-                options.GlossaryFilePath,
-                bundle.TextUnits,
-                cancellationToken,
-                termTranslator: (term, token) => TranslateGlossaryTermAsync(term, options, providers, token));
-            progress?.Report($"高频词自动入术语表：新增 {autoAdded} 条。");
-        }
-
         var glossaryService = await GlossaryService.LoadAsync(options.GlossaryFilePath, cancellationToken);
         var cachePath = options.CacheDbPath ?? Path.Combine(options.OutputPath, "cache", "translation_cache.db");
         progress?.Report($"加载术语表并打开缓存：{cachePath}");
         await using var cache = await TranslationCache.OpenAsync(cachePath, cancellationToken);
+        var existingSnapshot = await reviewService.TryLoadAsync(reviewPath, cancellationToken);
+        if (existingSnapshot is not null)
+        {
+            var imported = await reviewService.ApplySnapshotToCacheAsync(existingSnapshot, cache, cancellationToken);
+            progress?.Report($"已载入历史翻译对比数据：{imported} 条。");
+        }
 
         var orchestrator = new TranslationOrchestrator(
             new PlaceholderProtector(),
@@ -62,12 +60,64 @@ public sealed class LocalizationPipeline
         var normalizer = new LanguageMetadataNormalizer();
         normalizer.Normalize(bundle.Documents, options.TargetLanguage);
 
-        progress?.Report("开始翻译 DLL 硬编码字符串。");
-        var runtimeMap = await orchestrator.TranslateDllLiteralsAsync(
-            bundle.DllLiterals,
+        var runtimeMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var reviewSnapshot = reviewService.BuildSnapshot(bundle, runtimeMap, options);
+        await reviewService.SaveAsync(reviewPath, reviewSnapshot, cancellationToken);
+        progress?.Report($"翻译完成，已生成可编辑对比文件：{reviewPath}");
+
+        return new TranslationSummary
+        {
+            ModuleRootPath = bundle.ModuleRootPath,
+            OutputPath = options.OutputPath,
+            TotalTextCount = bundle.TextUnits.Count,
+            CacheHitCount = cacheHitCount,
+            ProviderCallCount = providerCallCount,
+            DllLiteralCount = bundle.DllLiterals.Count,
+            RuntimeMapPath = null,
+            ReviewFilePath = reviewPath,
+            ReviewEntryCount = reviewSnapshot.Entries.Count,
+            PackageCompleted = false
+        };
+    }
+
+    /// <summary>
+    /// 执行确认后的最终打包阶段。
+    /// </summary>
+    public async Task<TranslationSummary> RunPackageStageAsync(
+        TranslationRunOptions options,
+        CancellationToken cancellationToken,
+        IProgress<string>? progress = null)
+    {
+        progress?.Report("开始扫描语言文件并收集本地化引用（严格模式）。");
+        var extractor = new ModTextExtractor(new TextClassifier(), new DllStringScanner());
+        var bundle = extractor.Extract(options.ModPath);
+        progress?.Report($"扫描完成：语言条目 {bundle.TextUnits.Count}。");
+
+        var reviewService = new TranslationReviewService();
+        var reviewPath = options.ReviewFilePath ?? TranslationReviewService.ResolveDefaultPath(options.OutputPath, bundle.ModuleRootPath);
+        var cachePath = options.CacheDbPath ?? Path.Combine(options.OutputPath, "cache", "translation_cache.db");
+        progress?.Report($"加载缓存并准备打包：{cachePath}");
+        await using var cache = await TranslationCache.OpenAsync(cachePath, cancellationToken);
+        var snapshot = await reviewService.TryLoadAsync(reviewPath, cancellationToken);
+        if (snapshot is not null)
+        {
+            var imported = await reviewService.ApplySnapshotToCacheAsync(snapshot, cache, cancellationToken);
+            progress?.Report($"已应用人工确认译文：{imported} 条。");
+        }
+        else
+        {
+            progress?.Report("未找到翻译对比文件，将直接按缓存内容打包。");
+        }
+
+        var (textCacheHitCount, dllCacheHitCount, runtimeMap) = await ApplyCacheToBundleAsync(
+            bundle,
             options,
+            cache,
             cancellationToken,
             progress);
+        var normalizer = new LanguageMetadataNormalizer();
+        normalizer.Normalize(bundle.Documents, options.TargetLanguage);
+
         var builder = new PackageBuilder();
         progress?.Report("开始写入文件并打包。");
         var (outputPath, runtimeMapPath) = await builder.BuildAsync(bundle, runtimeMap, options, cancellationToken);
@@ -78,11 +128,63 @@ public sealed class LocalizationPipeline
             ModuleRootPath = bundle.ModuleRootPath,
             OutputPath = outputPath,
             TotalTextCount = bundle.TextUnits.Count,
-            CacheHitCount = cacheHitCount,
-            ProviderCallCount = providerCallCount,
+            CacheHitCount = textCacheHitCount + dllCacheHitCount,
+            ProviderCallCount = 0,
             DllLiteralCount = bundle.DllLiterals.Count,
-            RuntimeMapPath = runtimeMapPath
+            RuntimeMapPath = runtimeMapPath,
+            ReviewFilePath = reviewPath,
+            ReviewEntryCount = snapshot?.Entries.Count ?? 0,
+            PackageCompleted = true
         };
+    }
+
+    private static async Task<(int textCacheHitCount, int dllCacheHitCount, IReadOnlyDictionary<string, string> runtimeMap)> ApplyCacheToBundleAsync(
+        ScanBundle bundle,
+        TranslationRunOptions options,
+        TranslationCache cache,
+        CancellationToken cancellationToken,
+        IProgress<string>? progress)
+    {
+        var placeholderProtector = new PlaceholderProtector();
+        var textCacheHitCount = 0;
+        var translatedMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var textKeyMap = bundle.TextUnits
+            .GroupBy(unit => unit.BuildCacheKey(options), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        var textTotal = textKeyMap.Count;
+        var textCurrent = 0;
+        foreach (var (cacheKey, unit) in textKeyMap)
+        {
+            var translated = await cache.TryGetAsync(cacheKey, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(translated) &&
+                placeholderProtector.IsPlaceholderSafe(unit.SourceText, translated) &&
+                placeholderProtector.IsDoubleBraceBlockSafe(unit.SourceText, translated))
+            {
+                translatedMap[cacheKey] = translated;
+                textCacheHitCount++;
+            }
+            else
+            {
+                translatedMap[cacheKey] = unit.SourceText;
+            }
+
+            textCurrent++;
+            if (textCurrent % 200 == 0 || textCurrent == textTotal)
+            {
+                progress?.Report($"打包回填进度（文本）：{textCurrent}/{textTotal}");
+            }
+        }
+
+        foreach (var unit in bundle.TextUnits)
+        {
+            var cacheKey = unit.BuildCacheKey(options);
+            if (translatedMap.TryGetValue(cacheKey, out var translated))
+            {
+                unit.ApplyTranslation(translated);
+            }
+        }
+
+        return (textCacheHitCount, dllCacheHitCount: 0, runtimeMap: new Dictionary<string, string>(StringComparer.Ordinal));
     }
 
     private static void RegisterCustomProviderIfNeeded(
@@ -105,38 +207,5 @@ public sealed class LocalizationPipeline
             custom.ApiKey,
             custom.BaseUrl,
             custom.Model);
-    }
-
-    private static async Task<string?> TranslateGlossaryTermAsync(
-        string source,
-        TranslationRunOptions options,
-        IReadOnlyDictionary<string, MbCnsTool.Core.Abstractions.ITranslationProvider> providers,
-        CancellationToken cancellationToken)
-    {
-        var request = new TranslationProviderRequest
-        {
-            Text = source,
-            Category = TextCategory.系统,
-            StyleProfile = "请将术语翻译为简体中文词条，仅输出译文。",
-            TargetLanguage = options.TargetLanguage,
-            GlossaryPrompt = string.Empty
-        };
-
-        foreach (var providerName in options.ProviderChain.Where(name => !name.Equals("fallback", StringComparison.OrdinalIgnoreCase)))
-        {
-            if (!providers.TryGetValue(providerName, out var provider) || !provider.IsAvailable)
-            {
-                continue;
-            }
-
-            var translated = (await provider.TranslateAsync(request, cancellationToken))?.Trim();
-            if (!string.IsNullOrWhiteSpace(translated) &&
-                !string.Equals(translated, source, StringComparison.OrdinalIgnoreCase))
-            {
-                return translated;
-            }
-        }
-
-        return null;
     }
 }

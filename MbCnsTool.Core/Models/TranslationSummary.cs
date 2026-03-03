@@ -39,4 +39,19 @@ public sealed class TranslationSummary
     /// 运行时映射文件路径。
     /// </summary>
     public string? RuntimeMapPath { get; init; }
+
+    /// <summary>
+    /// 翻译对比文件路径。
+    /// </summary>
+    public string? ReviewFilePath { get; init; }
+
+    /// <summary>
+    /// 翻译对比条目数量。
+    /// </summary>
+    public int ReviewEntryCount { get; init; }
+
+    /// <summary>
+    /// 是否已完成最终打包。
+    /// </summary>
+    public bool PackageCompleted { get; init; }
 }

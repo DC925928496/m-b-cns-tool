@@ -141,8 +141,10 @@
                 <TextBlock Grid.Row="7" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="操作" />
                 <WrapPanel Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="2">
                     <Button Content="自定义 AI" Click="OnOpenCustomProvider" />
-                    <Button Content="编辑术语表" Click="OnEditGlossary" />
-                    <Button x:Name="StartButton" Content="开始汉化" Click="OnStartTranslate" />
+                    <Button Content="打开术语目录" Click="OnOpenGlossaryFolder" />
+                    <Button Content="编辑翻译对比" Click="OnEditReview" />
+                    <Button x:Name="StartButton" Content="开始翻译" Click="OnStartTranslate" />
+                    <Button x:Name="FinalizeButton" Content="最终打包" Click="OnFinalizePackage" IsEnabled="False" />
                 </WrapPanel>
             </Grid>
         </Border>
@@ -182,7 +184,7 @@
                            Grid.Column="0"
                            Grid.ColumnSpan="3"
                            Foreground="#6B7280"
-                           Text="术语表与缓存路径固定内置；目标语言固定为简体中文。"
+                           Text="流程改为两阶段：先翻译并编辑对比缓存，再手动执行最终打包。"
                            TextWrapping="Wrap" />
             </Grid>
         </Border>

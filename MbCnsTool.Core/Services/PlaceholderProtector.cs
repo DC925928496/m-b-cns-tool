@@ -38,15 +38,67 @@ public sealed partial class PlaceholderProtector
     }
 
     /// <summary>
-    /// 校验占位符数量是否一致。
+    /// 校验占位符集合是否一致（内容不允许被改写）。
     /// </summary>
     public bool IsPlaceholderSafe(string source, string translated)
     {
-        return PlaceholderRegex().Matches(source).Count == PlaceholderRegex().Matches(translated).Count;
+        var sourceTokens = PlaceholderRegex().Matches(source).Select(match => match.Value).ToArray();
+        var translatedTokens = PlaceholderRegex().Matches(translated).Select(match => match.Value).ToArray();
+        if (sourceTokens.Length != translatedTokens.Length)
+        {
+            return false;
+        }
+
+        var sourceMap = sourceTokens
+            .GroupBy(token => token, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var translatedMap = translatedTokens
+            .GroupBy(token => token, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        if (sourceMap.Count != translatedMap.Count)
+        {
+            return false;
+        }
+
+        foreach (var (token, count) in sourceMap)
+        {
+            if (!translatedMap.TryGetValue(token, out var translatedCount) || translatedCount != count)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
-    [GeneratedRegex(@"\{[^{}]+\}|<[^<>]+>|%[^%\s]+%|__PH_\d+__")]
+    /// <summary>
+    /// 校验双花括号块内容是否被篡改。
+    /// </summary>
+    public bool IsDoubleBraceBlockSafe(string source, string translated)
+    {
+        var sourceBlocks = DoubleBraceBlockRegex().Matches(source).Select(match => match.Value).ToArray();
+        var translatedBlocks = DoubleBraceBlockRegex().Matches(translated).Select(match => match.Value).ToArray();
+        if (sourceBlocks.Length != translatedBlocks.Length)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < sourceBlocks.Length; index++)
+        {
+            if (!sourceBlocks[index].Equals(translatedBlocks[index], StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    [GeneratedRegex(@"\{\{[\s\S]*?\}\}|\{[^{}]+\}|<[^<>]+>|%[^%\s]+%|__PH_\d+__")]
     private static partial Regex PlaceholderRegex();
+
+    [GeneratedRegex(@"\{\{[\s\S]*?\}\}")]
+    private static partial Regex DoubleBraceBlockRegex();
 }
 
 /// <summary>

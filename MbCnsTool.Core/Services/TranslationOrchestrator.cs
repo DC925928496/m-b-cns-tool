@@ -56,7 +56,7 @@ public sealed class TranslationOrchestrator
         {
             var (cacheKey, unit) = entry;
             var cached = await _cache.TryGetAsync(cacheKey, token);
-            if (!string.IsNullOrWhiteSpace(cached))
+            if (!string.IsNullOrWhiteSpace(cached) && IsTranslationSafe(unit.SourceText, cached))
             {
                 translatedMap[cacheKey] = cached;
                 Interlocked.Increment(ref cacheHitCount);
@@ -81,7 +81,7 @@ public sealed class TranslationOrchestrator
             translated = _placeholderProtector.Restore(translated, protectedText.Tokens);
             translated = _glossaryService.ApplyToTranslation(translated);
 
-            if (!_placeholderProtector.IsPlaceholderSafe(unit.SourceText, translated))
+            if (!IsTranslationSafe(unit.SourceText, translated))
             {
                 translated = unit.SourceText;
             }
@@ -123,9 +123,9 @@ public sealed class TranslationOrchestrator
 
         await Parallel.ForEachAsync(literals, parallelOptions, async (literal, token) =>
         {
-            var cacheKey = $"{TextCategory.系统}|{options.StyleProfile}|DLL|{literal.SourceText}";
+            var cacheKey = TranslationCacheKeyBuilder.BuildDllKey(literal.SourceText, options);
             var cached = await _cache.TryGetAsync(cacheKey, token);
-            if (!string.IsNullOrWhiteSpace(cached))
+            if (!string.IsNullOrWhiteSpace(cached) && IsTranslationSafe(literal.SourceText, cached))
             {
                 result[literal.SourceText] = cached;
                 ReportDllProgress(progress, ref current, total);
@@ -145,7 +145,7 @@ public sealed class TranslationOrchestrator
             var translated = await TryTranslateAsync(request, options.ProviderChain, token) ?? literal.SourceText;
             translated = _placeholderProtector.Restore(translated, protectedText.Tokens);
             translated = _glossaryService.ApplyToTranslation(translated);
-            if (!_placeholderProtector.IsPlaceholderSafe(literal.SourceText, translated))
+            if (!IsTranslationSafe(literal.SourceText, translated))
             {
                 translated = literal.SourceText;
             }
@@ -198,5 +198,11 @@ public sealed class TranslationOrchestrator
         {
             progress?.Report($"DLL 翻译进度：{processed}/{total}");
         }
+    }
+
+    private bool IsTranslationSafe(string source, string translated)
+    {
+        return _placeholderProtector.IsPlaceholderSafe(source, translated) &&
+               _placeholderProtector.IsDoubleBraceBlockSafe(source, translated);
     }
 }

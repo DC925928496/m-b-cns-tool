@@ -41,6 +41,11 @@ public sealed class TranslationRunOptions
     public string? CacheDbPath { get; init; }
 
     /// <summary>
+    /// 翻译对比文件路径。
+    /// </summary>
+    public string? ReviewFilePath { get; init; }
+
+    /// <summary>
     /// 翻译引擎链路顺序。
     /// </summary>
     public IReadOnlyList<string> ProviderChain { get; init; } = ["google_free", "fallback"];
