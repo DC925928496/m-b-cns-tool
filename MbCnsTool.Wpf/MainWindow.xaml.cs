@@ -1,10 +1,15 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using MbCnsTool.Core;
 using MbCnsTool.Core.Models;
 using MbCnsTool.Core.Services;
 using MbCnsTool.Wpf.ViewModels;
+using WpfBinding = System.Windows.Data.Binding;
+using WpfClipboard = System.Windows.Clipboard;
+using WpfTextDataFormat = System.Windows.TextDataFormat;
 
 namespace MbCnsTool.Wpf;
 
@@ -25,6 +30,163 @@ public partial class MainWindow : Window
         EntriesDataGrid.ItemsSource = _rows;
         AppendLog("就绪。请选择 Mod 根目录，然后点击“扫描”。");
         AppendLog("说明：工程记录与缓存固定保存在工具目录 data/；外置汉化包默认输出到原 Mod 同级目录。");
+    }
+
+    private void OnEntriesDataGridCanPaste(object sender, CanExecuteRoutedEventArgs e)
+    {
+        e.CanExecute = !_isBusy && WpfClipboard.ContainsText(WpfTextDataFormat.Text);
+        e.Handled = true;
+    }
+
+    private void OnEntriesDataGridPaste(object sender, ExecutedRoutedEventArgs e)
+    {
+        if (_isBusy)
+        {
+            return;
+        }
+
+        if (!WpfClipboard.ContainsText(WpfTextDataFormat.Text))
+        {
+            return;
+        }
+
+        var clipboardText = WpfClipboard.GetText(WpfTextDataFormat.Text);
+        if (string.IsNullOrWhiteSpace(clipboardText))
+        {
+            return;
+        }
+
+        var targetColumn = TryGetTargetTextColumn();
+        if (targetColumn is null)
+        {
+            return;
+        }
+
+        var selectedTargetCells = EntriesDataGrid.SelectedCells
+            .Where(cell => ReferenceEquals(cell.Column, targetColumn) && cell.Item is ProjectEntryRow)
+            .ToArray();
+
+        var rows = ParseClipboardRows(clipboardText);
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        // 1) 单值：对所有选中“译文”单元格批量填充（更接近 Excel 的体验）
+        if (rows.Count == 1 && rows[0].Length == 1)
+        {
+            var value = rows[0][0];
+            if (selectedTargetCells.Length > 0)
+            {
+                foreach (var cell in selectedTargetCells)
+                {
+                    if (cell.Item is ProjectEntryRow row)
+                    {
+                        row.TargetText = value;
+                    }
+                }
+
+                e.Handled = true;
+                return;
+            }
+
+            if (EntriesDataGrid.CurrentCell.Item is ProjectEntryRow currentRow)
+            {
+                currentRow.TargetText = value;
+                e.Handled = true;
+            }
+
+            return;
+        }
+
+        // 2) 多行：优先按选中单元格（同列）从上到下填充；无显式选中则从当前行开始向下填充。
+        var destinationRows = selectedTargetCells.Length > 0
+            ? selectedTargetCells
+                .Select(cell => cell.Item)
+                .OfType<ProjectEntryRow>()
+                .Distinct()
+                .OrderBy(row => _rows.IndexOf(row))
+                .ToArray()
+            : GetRowsFromCurrentCellDown();
+
+        if (destinationRows.Length == 0)
+        {
+            return;
+        }
+
+        var writeCount = Math.Min(destinationRows.Length, rows.Count);
+        for (var i = 0; i < writeCount; i++)
+        {
+            destinationRows[i].TargetText = JoinClipboardFields(rows[i]);
+        }
+
+        e.Handled = true;
+    }
+
+    private DataGridColumn? TryGetTargetTextColumn()
+    {
+        foreach (var column in EntriesDataGrid.Columns.OfType<DataGridBoundColumn>())
+        {
+            if (column.Binding is WpfBinding binding &&
+                string.Equals(binding.Path?.Path, nameof(ProjectEntryRow.TargetText), StringComparison.Ordinal))
+            {
+                return column;
+            }
+        }
+
+        return null;
+    }
+
+    private ProjectEntryRow[] GetRowsFromCurrentCellDown()
+    {
+        if (EntriesDataGrid.CurrentCell.Item is not ProjectEntryRow currentRow)
+        {
+            return [];
+        }
+
+        var startIndex = _rows.IndexOf(currentRow);
+        if (startIndex < 0)
+        {
+            return [];
+        }
+
+        return _rows.Skip(startIndex).ToArray();
+    }
+
+    private static IReadOnlyList<string[]> ParseClipboardRows(string clipboardText)
+    {
+        // 兼容 Windows / Unix 换行；按 Excel 习惯：换行分行，TAB 分列。
+        var normalized = clipboardText.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var lines = normalized.Split('\n');
+
+        var result = new List<string[]>(capacity: lines.Length);
+        foreach (var rawLine in lines)
+        {
+            // 允许末尾有空行（例如 Excel 复制的最后一行自带换行），直接跳过即可。
+            if (string.IsNullOrEmpty(rawLine))
+            {
+                continue;
+            }
+
+            result.Add(rawLine.Split('\t'));
+        }
+
+        return result;
+    }
+
+    private static string JoinClipboardFields(string[] fields)
+    {
+        if (fields.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (fields.Length == 1)
+        {
+            return fields[0];
+        }
+
+        return string.Join('\t', fields);
     }
 
     private void OnPickModDirectory(object sender, RoutedEventArgs e)

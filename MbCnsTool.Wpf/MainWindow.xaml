@@ -95,7 +95,16 @@
         </Border>
 
         <Border Grid.Row="1" Margin="0,12,0,12" Style="{StaticResource CardStyle}">
-            <DataGrid x:Name="EntriesDataGrid" ItemsSource="{Binding}" SelectionUnit="FullRow">
+            <DataGrid x:Name="EntriesDataGrid"
+                      ItemsSource="{Binding}"
+                      SelectionUnit="CellOrRowHeader"
+                      SelectionMode="Extended"
+                      ClipboardCopyMode="ExcludeHeader">
+                <DataGrid.CommandBindings>
+                    <CommandBinding Command="ApplicationCommands.Paste"
+                                    CanExecute="OnEntriesDataGridCanPaste"
+                                    Executed="OnEntriesDataGridPaste" />
+                </DataGrid.CommandBindings>
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="所属文件" Binding="{Binding DisplaySourceFile}" IsReadOnly="True" Width="260" />
                     <DataGridTextColumn Header="ID" Binding="{Binding Id}" IsReadOnly="True" Width="200" />
