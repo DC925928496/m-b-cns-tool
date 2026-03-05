@@ -1,13 +1,10 @@
 <Window x:Class="MbCnsTool.Wpf.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d"
         Title="骑砍2 Mod 汉化工具"
-        Width="1080"
+        Width="1200"
         Height="820"
-        MinWidth="920"
+        MinWidth="980"
         MinHeight="680"
         Background="#F7F8FA"
         FontFamily="Segoe UI"
@@ -42,25 +39,23 @@
             <Setter Property="BorderBrush" Value="#D8DCE3" />
             <Setter Property="BorderThickness" Value="1" />
         </Style>
-        <Style x:Key="InputComboBoxStyle" TargetType="ComboBox">
-            <Setter Property="Height" Value="32" />
-            <Setter Property="Margin" Value="0,0,8,8" />
-            <Setter Property="Padding" Value="6,0" />
-            <Setter Property="BorderBrush" Value="#D8DCE3" />
-            <Setter Property="BorderThickness" Value="1" />
-        </Style>
-        <Style TargetType="ProgressBar">
-            <Setter Property="Height" Value="10" />
-            <Setter Property="Margin" Value="0,0,8,8" />
-            <Setter Property="Maximum" Value="100" />
+        <Style TargetType="DataGrid">
+            <Setter Property="AutoGenerateColumns" Value="False" />
+            <Setter Property="CanUserAddRows" Value="False" />
+            <Setter Property="CanUserDeleteRows" Value="False" />
+            <Setter Property="CanUserReorderColumns" Value="True" />
+            <Setter Property="HeadersVisibility" Value="Column" />
+            <Setter Property="IsReadOnly" Value="False" />
+            <Setter Property="GridLinesVisibility" Value="None" />
+            <Setter Property="RowHeaderWidth" Value="0" />
         </Style>
     </Window.Resources>
 
-    <Grid Margin="16" Grid.IsSharedSizeScope="True">
+    <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="220" />
         </Grid.RowDefinitions>
 
         <Border Grid.Row="0" Style="{StaticResource CardStyle}">
@@ -70,129 +65,67 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" SharedSizeGroup="FormLabel" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Mod 路径" />
+                <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Mod 根目录" />
                 <TextBox x:Name="ModPathTextBox" Grid.Row="0" Grid.Column="1" Style="{StaticResource InputTextBoxStyle}" />
                 <Button Grid.Row="0" Grid.Column="2" Content="选择目录" Click="OnPickModDirectory" />
 
-                <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="输出目录" />
-                <TextBox x:Name="OutputPathTextBox" Grid.Row="1" Grid.Column="1" Style="{StaticResource InputTextBoxStyle}" />
-                <Button Grid.Row="1" Grid.Column="2" Content="选择目录" Click="OnPickOutputDirectory" />
+                <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="汉化包输出" />
+                <TextBox x:Name="OutputPathTextBox" Grid.Row="1" Grid.Column="1" Style="{StaticResource InputTextBoxStyle}" IsReadOnly="True" />
+                <Button Grid.Row="1" Grid.Column="2" Content="自定义" Click="OnPickOutputDirectory" />
 
-                <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="输出模式" />
-                <ComboBox x:Name="ModeComboBox"
-                          Grid.Row="2"
-                          Grid.Column="1"
-                          Grid.ColumnSpan="2"
-                          Style="{StaticResource InputComboBoxStyle}"
-                          SelectionChanged="OnModeSelectionChanged">
-                    <ComboBoxItem Tag="external" Content="外置汉化包（推荐）" />
-                    <ComboBoxItem Tag="overlay" Content="覆盖原文件（仅自用）" />
-                </ComboBox>
-
-                <TextBlock x:Name="ModeHintTextBlock"
-                           Grid.Row="3"
-                           Grid.Column="1"
-                           Grid.ColumnSpan="2"
-                           Margin="0,0,0,8"
-                           Foreground="#6B7280"
-                           TextWrapping="Wrap" />
-
-                <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="翻译风格" />
-                <ComboBox x:Name="StyleComboBox"
-                          Grid.Row="4"
-                          Grid.Column="1"
-                          Grid.ColumnSpan="2"
-                          Style="{StaticResource InputComboBoxStyle}"
-                          IsEditable="True">
-                    <ComboBoxItem Content="请用骑马与砍杀2的中世纪风格进行翻译" />
-                    <ComboBoxItem Content="史诗叙事风" />
-                    <ComboBoxItem Content="武侠风" />
-                </ComboBox>
-
-                <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="翻译引擎" />
-                <ComboBox x:Name="EngineComboBox"
-                          Grid.Row="5"
-                          Grid.Column="1"
-                          Grid.ColumnSpan="2"
-                          Style="{StaticResource InputComboBoxStyle}" />
-
-                <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="并发数" />
-                <StackPanel Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,8">
-                    <TextBox x:Name="ConcurrencyTextBox"
-                             Width="100"
-                             Style="{StaticResource InputTextBoxStyle}"
-                             Text="6" />
-                    <TextBlock VerticalAlignment="Center"
-                               Foreground="#6B7280"
-                               Text="范围 1-32，默认 6（数值越高速度越快，但更容易触发限流）" />
+                <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,2,0,8">
+                    <CheckBox x:Name="ScanDllCheckBox" Content="扫描 DLL（仅 TextObject 字面量）" Margin="0,0,16,0" VerticalAlignment="Center" />
+                    <TextBlock VerticalAlignment="Center" Foreground="#6B7280" Text="提示：严格安全优先，硬编码注入仅对目标游戏版本生效。" />
                 </StackPanel>
 
-                <TextBlock Grid.Row="7" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="操作" />
-                <WrapPanel Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="2">
-                    <Button Content="自定义 AI" Click="OnOpenCustomProvider" />
-                    <Button Content="打开术语目录" Click="OnOpenGlossaryFolder" />
-                    <Button Content="编辑翻译对比" Click="OnEditReview" />
-                    <Button x:Name="StartButton" Content="开始翻译" Click="OnStartTranslate" />
-                    <Button x:Name="FinalizeButton" Content="最终打包" Click="OnFinalizePackage" IsEnabled="False" />
+                <WrapPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3">
+                    <Button x:Name="ScanButton" Content="扫描" Click="OnScan" />
+                    <Button x:Name="TranslateButton" Content="开始翻译" Click="OnTranslate" IsEnabled="False" />
+                    <Button x:Name="SaveButton" Content="保存记录" Click="OnSaveProject" IsEnabled="False" />
+                    <Button x:Name="PackageButton" Content="打包" Click="OnPackage" IsEnabled="False" />
                 </WrapPanel>
             </Grid>
         </Border>
 
         <Border Grid.Row="1" Margin="0,12,0,12" Style="{StaticResource CardStyle}">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" SharedSizeGroup="FormLabel" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="56" />
-                </Grid.ColumnDefinitions>
-
-                <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="扫描" />
-                <ProgressBar x:Name="ScanProgressBar" Grid.Row="0" Grid.Column="1" />
-                <TextBlock x:Name="ScanProgressText" Grid.Row="0" Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right" Text="0%" />
-
-                <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="文本翻译" />
-                <ProgressBar x:Name="TextProgressBar" Grid.Row="1" Grid.Column="1" />
-                <TextBlock x:Name="TextProgressText" Grid.Row="1" Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right" Text="0%" />
-
-                <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="DLL 翻译" />
-                <ProgressBar x:Name="DllProgressBar" Grid.Row="2" Grid.Column="1" />
-                <TextBlock x:Name="DllProgressText" Grid.Row="2" Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right" Text="0%" />
-
-                <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="打包" />
-                <ProgressBar x:Name="PackageProgressBar" Grid.Row="3" Grid.Column="1" />
-                <TextBlock x:Name="PackageProgressText" Grid.Row="3" Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right" Text="0%" />
-
-                <TextBlock Grid.Row="4"
-                           Grid.Column="0"
-                           Grid.ColumnSpan="3"
-                           Foreground="#6B7280"
-                           Text="流程改为两阶段：先翻译并编辑对比缓存，再手动执行最终打包。"
-                           TextWrapping="Wrap" />
-            </Grid>
+            <DataGrid x:Name="EntriesDataGrid" ItemsSource="{Binding}" SelectionUnit="FullRow">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="所属文件" Binding="{Binding DisplaySourceFile}" IsReadOnly="True" Width="260" />
+                    <DataGridTextColumn Header="ID" Binding="{Binding Id}" IsReadOnly="True" Width="200" />
+                    <DataGridTextColumn Header="text" Binding="{Binding SourceText}" IsReadOnly="True" Width="*">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="TextWrapping" Value="Wrap" />
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    <DataGridTextColumn Header="译文" Binding="{Binding TargetText, UpdateSourceTrigger=PropertyChanged}" Width="*">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="TextWrapping" Value="Wrap" />
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                        <DataGridTextColumn.EditingElementStyle>
+                            <Style TargetType="TextBox">
+                                <Setter Property="TextWrapping" Value="Wrap" />
+                                <Setter Property="AcceptsReturn" Value="True" />
+                                <Setter Property="VerticalScrollBarVisibility" Value="Auto" />
+                            </Style>
+                        </DataGridTextColumn.EditingElementStyle>
+                    </DataGridTextColumn>
+                </DataGrid.Columns>
+            </DataGrid>
         </Border>
 
-        <Border Grid.Row="2" Style="{StaticResource CardStyle}" MinHeight="260">
+        <Border Grid.Row="2" Style="{StaticResource CardStyle}">
             <TextBox x:Name="LogTextBox"
-                     Margin="0"
-                     MinHeight="220"
                      VerticalScrollBarVisibility="Auto"
                      HorizontalScrollBarVisibility="Auto"
                      AcceptsReturn="True"

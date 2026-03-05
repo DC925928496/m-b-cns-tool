@@ -21,7 +21,8 @@ public sealed class TranslationCache : IAsyncDisposable
     public static async Task<TranslationCache> OpenAsync(string dbPath, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath) ?? ".");
-        var connection = new SqliteConnection($"Data Source={dbPath}");
+        // 禁用连接池，避免 Windows 下文件句柄被池持有导致无法删除数据库文件（测试与临时目录清理需要）。
+        var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
         await connection.OpenAsync(cancellationToken);
 
         var initCommand = connection.CreateCommand();

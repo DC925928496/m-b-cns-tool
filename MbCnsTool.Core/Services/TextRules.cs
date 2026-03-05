@@ -95,6 +95,8 @@ public static partial class TextRules
     [GeneratedRegex(@"^\{=(?<id>[^}]+)\}")]
     private static partial Regex TranslationIdRegex();
 
-    [GeneratedRegex(@"^[a-z0-9_./-]+$", RegexOptions.IgnoreCase)]
+    // 仅将“带分隔符的 token”（如 weapon_sword / foo/bar / a-b）视为标识符；
+    // 纯英文单词（如 Cancel / Sword）属于界面文本，仍应进入翻译流程。
+    [GeneratedRegex(@"^[a-z0-9]+([_./-][a-z0-9]+)+$", RegexOptions.IgnoreCase)]
     private static partial Regex LooksLikeIdentifierRegex();
 }

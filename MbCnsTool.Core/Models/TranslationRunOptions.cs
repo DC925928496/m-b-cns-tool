@@ -56,6 +56,11 @@ public sealed class TranslationRunOptions
     public int MaxConcurrency { get; init; } = 6;
 
     /// <summary>
+    /// 是否扫描 DLL（仅 TextObject 构造参数字符串字面量）。
+    /// </summary>
+    public bool ScanDll { get; init; } = false;
+
+    /// <summary>
     /// 自定义 OpenAI 兼容引擎配置。
     /// </summary>
     public CustomOpenAiProviderOptions? CustomOpenAiProvider { get; init; }

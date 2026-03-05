@@ -14,12 +14,18 @@ namespace MbCnsTool.Core.Packaging;
 /// </summary>
 public sealed class PackageBuilder
 {
+    private const string RuntimeInjectorDllName = "MbCnsTool.RuntimeLocalization.dll";
+    private const string RuntimeInjectorHarmonyDllName = "0Harmony.dll";
+    private const string RuntimeInjectorSubModuleName = "MbCnsTool.RuntimeLocalization";
+    private const string RuntimeInjectorSubModuleClassType = "MbCnsTool.RuntimeLocalization.RuntimeLocalizationSubModule";
+    private const string RuntimeInjectorArtifactsDirectoryEnv = "MBCNS_RUNTIME_INJECTOR_DIR";
+
     /// <summary>
     /// 执行打包。
     /// </summary>
     public async Task<(string outputPath, string? runtimeMapPath)> BuildAsync(
         ScanBundle bundle,
-        IReadOnlyDictionary<string, string> runtimeMap,
+        RuntimeLocalizationMap? runtimeMap,
         TranslationRunOptions options,
         CancellationToken cancellationToken)
     {
@@ -30,10 +36,15 @@ public sealed class PackageBuilder
 
     private static async Task<(string outputPath, string? runtimeMapPath)> BuildOverlayAsync(
         ScanBundle bundle,
-        IReadOnlyDictionary<string, string> runtimeMap,
+        RuntimeLocalizationMap? runtimeMap,
         string targetLanguage,
         CancellationToken cancellationToken)
     {
+        if (runtimeMap is not null && runtimeMap.Entries.Count > 0)
+        {
+            throw new InvalidOperationException("覆盖模式不支持 DLL 运行时注入条目（为避免修改原 Mod 的 SubModule 与 bin 目录）。请改用 external 外置包模式。");
+        }
+
         foreach (var document in bundle.Documents)
         {
             await document.SaveToAsync(bundle.ModuleRootPath, cancellationToken);
@@ -46,7 +57,7 @@ public sealed class PackageBuilder
 
     private static async Task<(string outputPath, string? runtimeMapPath)> BuildExternalAsync(
         ScanBundle bundle,
-        IReadOnlyDictionary<string, string> runtimeMap,
+        RuntimeLocalizationMap? runtimeMap,
         string outputRoot,
         string targetLanguage,
         CancellationToken cancellationToken)
@@ -89,9 +100,14 @@ public sealed class PackageBuilder
         }
 
         await WriteXsltPatchFilesAsync(packageRoot, changedUnits, cancellationToken);
-        await WriteInterfaceLanguageFileAsync(packageRoot, bundle.TextUnits, cancellationToken);
+        await WriteFallbackLanguageFileIfNeededAsync(packageRoot, bundle.TextUnits, cancellationToken);
         CopyIfExists(Path.Combine(bundle.ModuleRootPath, "preview.png"), Path.Combine(packageRoot, "preview.png"));
-        await GenerateSubModuleForExternalPackageAsync(bundle.ModuleRootPath, packageRoot, targetModuleName, cancellationToken);
+        var includeRuntimeInjector = runtimeMap is not null && runtimeMap.Entries.Count > 0;
+        await GenerateSubModuleForExternalPackageAsync(bundle.ModuleRootPath, packageRoot, targetModuleName, includeRuntimeInjector, cancellationToken);
+        if (includeRuntimeInjector)
+        {
+            CopyRuntimeInjectorArtifacts(packageRoot);
+        }
 
         await EnsureLanguageLayoutAsync(packageRoot, targetLanguage, cancellationToken);
         var runtimeMapPath = await WriteRuntimeMapAsync(packageRoot, runtimeMap, cancellationToken);
@@ -102,6 +118,7 @@ public sealed class PackageBuilder
         string sourceModuleRoot,
         string packageRoot,
         string targetModuleName,
+        bool includeRuntimeInjector,
         CancellationToken cancellationToken)
     {
         var sourceSubModulePath = Path.Combine(sourceModuleRoot, "SubModule.xml");
@@ -140,7 +157,13 @@ public sealed class PackageBuilder
                 new XElement(xmlNamespace + "DependedModule", new XAttribute("Id", sourceId))));
 
         // 外置汉化包不应重复加载原 Mod 的运行时代码，仅保留数据声明（如 Xmls）。
-        ReplaceChildElement(module, xmlNamespace, "SubModules", new XElement(xmlNamespace + "SubModules"));
+        ReplaceChildElement(
+            module,
+            xmlNamespace,
+            "SubModules",
+            includeRuntimeInjector
+                ? new XElement(xmlNamespace + "SubModules", BuildRuntimeInjectorSubModuleElement(xmlNamespace))
+                : new XElement(xmlNamespace + "SubModules"));
         FilterMissingXmlEntries(module, packageRoot);
         EnsureLanguageDataXmlEntry(module, xmlNamespace);
 
@@ -159,6 +182,15 @@ public sealed class PackageBuilder
         sourceDocument.Save(writer);
         await writer.FlushAsync();
         await stream.FlushAsync(cancellationToken);
+    }
+
+    private static XElement BuildRuntimeInjectorSubModuleElement(XNamespace xmlNamespace)
+    {
+        return new XElement(
+            xmlNamespace + "SubModule",
+            new XElement(xmlNamespace + "Name", new XAttribute("value", RuntimeInjectorSubModuleName)),
+            new XElement(xmlNamespace + "DLLName", new XAttribute("value", RuntimeInjectorDllName)),
+            new XElement(xmlNamespace + "SubModuleClassType", new XAttribute("value", RuntimeInjectorSubModuleClassType)));
     }
 
     private static void FilterMissingXmlEntries(XElement module, string packageRoot)
@@ -260,9 +292,67 @@ public sealed class PackageBuilder
         File.Copy(sourcePath, targetPath, overwrite: true);
     }
 
-    private static async Task<string?> WriteRuntimeMapAsync(string moduleRoot, IReadOnlyDictionary<string, string> runtimeMap, CancellationToken cancellationToken)
+    private static void CopyRuntimeInjectorArtifacts(string packageRoot)
     {
-        if (runtimeMap.Count == 0)
+        var binFolder = Path.Combine(packageRoot, "bin", "Win64_Shipping_Client");
+        Directory.CreateDirectory(binFolder);
+
+        var artifactsDir = ResolveRuntimeInjectorArtifactsDirectory();
+        var runtimeInjectorDll = Path.Combine(artifactsDir, RuntimeInjectorDllName);
+        var harmonyDll = Path.Combine(artifactsDir, RuntimeInjectorHarmonyDllName);
+
+        if (!File.Exists(runtimeInjectorDll))
+        {
+            throw new InvalidOperationException($"未找到运行时注入 DLL：{runtimeInjectorDll}。请确保工具发布目录包含 {RuntimeInjectorDllName}，或设置环境变量 {RuntimeInjectorArtifactsDirectoryEnv} 指向包含该文件的目录。");
+        }
+
+        if (!File.Exists(harmonyDll))
+        {
+            throw new InvalidOperationException($"未找到 Harmony 依赖：{harmonyDll}。请确保工具发布目录包含 {RuntimeInjectorHarmonyDllName}，或设置环境变量 {RuntimeInjectorArtifactsDirectoryEnv} 指向包含该文件的目录。");
+        }
+
+        File.Copy(runtimeInjectorDll, Path.Combine(binFolder, RuntimeInjectorDllName), overwrite: true);
+        File.Copy(harmonyDll, Path.Combine(binFolder, RuntimeInjectorHarmonyDllName), overwrite: true);
+    }
+
+    private static string ResolveRuntimeInjectorArtifactsDirectory()
+    {
+        var configured = Environment.GetEnvironmentVariable(RuntimeInjectorArtifactsDirectoryEnv);
+        if (!string.IsNullOrWhiteSpace(configured) && Directory.Exists(configured))
+        {
+            return configured;
+        }
+
+        var baseDir = AppContext.BaseDirectory;
+        var candidates = new[]
+        {
+            baseDir,
+            Path.Combine(baseDir, "runtime_injector"),
+            Path.Combine(baseDir, "runtime-localization"),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "MbCnsTool.RuntimeLocalization", "bin", "Release", "net472")),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "MbCnsTool.RuntimeLocalization", "bin", "Debug", "net472"))
+        };
+
+        foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(candidate))
+            {
+                continue;
+            }
+
+            if (File.Exists(Path.Combine(candidate, RuntimeInjectorDllName)) &&
+                File.Exists(Path.Combine(candidate, RuntimeInjectorHarmonyDllName)))
+            {
+                return candidate;
+            }
+        }
+
+        return baseDir;
+    }
+
+    private static async Task<string?> WriteRuntimeMapAsync(string moduleRoot, RuntimeLocalizationMap? runtimeMap, CancellationToken cancellationToken)
+    {
+        if (runtimeMap is null || runtimeMap.Entries.Count == 0)
         {
             return null;
         }
@@ -271,11 +361,8 @@ public sealed class PackageBuilder
         Directory.CreateDirectory(languageFolder);
         var path = Path.Combine(languageFolder, "runtime_localization.json");
 
-        await using var stream = File.Create(path);
-        await JsonSerializer.SerializeAsync(stream, runtimeMap, new JsonSerializerOptions
-        {
-            WriteIndented = true
-        }, cancellationToken);
+        var service = new RuntimeLocalizationMapService();
+        await service.SaveAsync(path, runtimeMap, cancellationToken);
 
         return path;
     }
@@ -423,11 +510,23 @@ public sealed class PackageBuilder
         return path.Replace('\\', '/').ToLowerInvariant();
     }
 
-    private static async Task WriteInterfaceLanguageFileAsync(
+    private static async Task WriteFallbackLanguageFileIfNeededAsync(
         string moduleRoot,
         IReadOnlyList<TextUnit> textUnits,
         CancellationToken cancellationToken)
     {
+        var languageRoot = Path.Combine(moduleRoot, "ModuleData", "Languages");
+        if (Directory.Exists(languageRoot))
+        {
+            var hasLanguageXml = Directory
+                .EnumerateFiles(languageRoot, "*.xml", SearchOption.AllDirectories)
+                .Any(path => !path.EndsWith("language_data.xml", StringComparison.OrdinalIgnoreCase));
+            if (hasLanguageXml)
+            {
+                return;
+            }
+        }
+
         var interfaceEntries = textUnits
             .Where(unit => unit.TranslationId is not null && IsUnitChanged(unit))
             .Select(unit =>
@@ -448,31 +547,8 @@ public sealed class PackageBuilder
             return;
         }
 
-        var languageRoot = Path.Combine(moduleRoot, "ModuleData", "Languages");
         Directory.CreateDirectory(languageRoot);
         var stringsPath = Path.Combine(languageRoot, "std_module_strings_xml.xml");
-
-        var merged = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (File.Exists(stringsPath))
-        {
-            var existing = XDocument.Load(stringsPath);
-            foreach (var node in existing.Descendants().Where(element => element.Name.LocalName == "string"))
-            {
-                var id = node.Attribute("id")?.Value;
-                var text = node.Attribute("text")?.Value;
-                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(text))
-                {
-                    continue;
-                }
-
-                merged[id] = text;
-            }
-        }
-
-        foreach (var (id, translated) in interfaceEntries)
-        {
-            merged[id] = translated;
-        }
 
         var document = new XDocument(
             new XDeclaration("1.0", "utf-8", "yes"),
@@ -484,12 +560,12 @@ public sealed class PackageBuilder
                     new XElement("tag", new XAttribute("language", "English"))),
                 new XElement(
                     "strings",
-                    merged
-                        .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                    interfaceEntries
+                        .OrderBy(entry => entry.id, StringComparer.Ordinal)
                         .Select(entry => new XElement(
                             "string",
-                            new XAttribute("id", entry.Key),
-                            new XAttribute("text", entry.Value))))));
+                            new XAttribute("id", entry.id),
+                            new XAttribute("text", entry.translated))))));
 
         await SaveXmlDocumentAsync(document, stringsPath, cancellationToken);
     }

@@ -24,4 +24,10 @@ public sealed class ScanBundle
     /// DLL 硬编码字符串。
     /// </summary>
     public required IReadOnlyList<DllStringLiteral> DllLiterals { get; init; }
+
+    /// <summary>
+    /// 翻译 ID 的来源文件集合（用于 UI 展示“所属文件”为原始引用位置）。
+    /// Key 为 string id，Value 为模块内相对路径或 DLL 名称。
+    /// </summary>
+    public required IReadOnlyDictionary<string, IReadOnlyList<string>> TranslationIdSources { get; init; }
 }

@@ -11,69 +11,167 @@ namespace MbCnsTool.Core.Extraction;
 public sealed class ModTextExtractor
 {
     private readonly TextClassifier _classifier;
-    private readonly DllStringScanner _dllStringScanner;
+    private readonly TextObjectLiteralScanner _textObjectLiteralScanner;
 
     /// <summary>
     /// 初始化提取器。
     /// </summary>
-    public ModTextExtractor(TextClassifier classifier, DllStringScanner dllStringScanner)
+    public ModTextExtractor(TextClassifier classifier, TextObjectLiteralScanner textObjectLiteralScanner)
     {
         _classifier = classifier;
-        _dllStringScanner = dllStringScanner;
+        _textObjectLiteralScanner = textObjectLiteralScanner;
     }
 
     /// <summary>
-    /// 执行严格扫描：只翻译 <c>std_module_strings_xml.xml</c>，其它文件仅用于收集 <c>{=id}</c> 引用补全语言文件。
+    /// 执行严格扫描：
+    /// <list type="bullet">
+    /// <item>扫描并加载 <c>ModuleData/Languages/</c> 下的语言文件（排除目标语言目录），作为可翻译文本来源；</item>
+    /// <item>扫描非语言 XML/JSON 与 DLL，仅收集 <c>{=id}</c> 引用用于补全缺失条目。</item>
+    /// </list>
     /// </summary>
-    public ScanBundle Extract(string modPath)
+    public ScanBundle Extract(string modPath, string targetLanguage = "zh-CN", bool scanDll = true)
     {
-        var moduleRoot = ResolveModuleRoot(modPath);
-        var documents = new List<SourceDocument>(capacity: 1);
+        var moduleRoot = ModuleRootLocator.Resolve(modPath);
+        var languageIndex = new LanguageStringIndexBuilder().Build(moduleRoot, targetLanguage);
 
-        var languageDocument = LoadOrCreateCanonicalLanguageDocument(moduleRoot);
-        documents.Add(languageDocument);
-
-        var references = new Dictionary<string, string>(StringComparer.Ordinal);
-        CollectTranslationIdReferencesFromXmlAndJson(moduleRoot, references);
-
-        foreach (var (id, defaultText) in _dllStringScanner.ScanTranslationIdReferences(moduleRoot))
+        var documents = new List<SourceDocument>();
+        var languageDocuments = LoadLanguageXmlDocuments(moduleRoot, languageIndex.PreferredFolderCode);
+        if (languageDocuments.Count == 0)
         {
-            TryAddReference(references, id, defaultText);
+            languageDocuments.Add(LoadOrCreateCanonicalLanguageDocument(moduleRoot));
         }
 
-        MergeReferencesIntoLanguageDocument(languageDocument.Document, references);
-        var textUnits = BuildLanguageTextUnits(languageDocument.Document, languageDocument.RelativePath);
+        documents.AddRange(languageDocuments);
+        var primaryLanguageDocument = SelectPrimaryLanguageDocument(languageDocuments);
+        if (primaryLanguageDocument is null)
+        {
+            throw new InvalidOperationException("未找到可用的语言文件（内部错误）。");
+        }
+
+        var references = new Dictionary<string, string>(StringComparer.Ordinal);
+        var idSources = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        CollectTranslationIdReferencesFromXmlAndJson(moduleRoot, references, idSources, languageIndex.AllIds);
+
+        var dllLiterals = new List<DllStringLiteral>();
+        if (scanDll)
+        {
+            foreach (var literal in _textObjectLiteralScanner.ScanTextObjectStringLiterals(moduleRoot))
+            {
+                var normalized = TextEncodingNormalizer.NormalizeMojibake(literal.SourceText.Trim());
+                var id = TextRules.ExtractTranslationId(normalized);
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    if (languageIndex.AllIds.Contains(id))
+                    {
+                        continue;
+                    }
+
+                    var defaultText = TextRules.StripTranslationIdPrefix(normalized);
+                    defaultText = TextEncodingNormalizer.NormalizeMojibake(defaultText);
+                    TryAddReference(references, id, defaultText);
+                    RegisterIdSource(idSources, id, literal.AssemblyName);
+                    continue;
+                }
+
+                if (!TextRules.IsTranslatableString(normalized))
+                {
+                    continue;
+                }
+
+                dllLiterals.Add(literal with { SourceText = normalized });
+            }
+        }
+
+        MergeReferencesIntoLanguageDocument(primaryLanguageDocument.Document, references);
+        var textUnits = new List<TextUnit>();
+        foreach (var document in languageDocuments)
+        {
+            textUnits.AddRange(BuildLanguageTextUnits(document.Document, document.RelativePath));
+        }
+
         return new ScanBundle
         {
             ModuleRootPath = moduleRoot,
             Documents = documents,
             TextUnits = textUnits,
-            DllLiterals = []
+            DllLiterals = dllLiterals,
+            TranslationIdSources = idSources.ToDictionary(
+                entry => entry.Key,
+                entry => (IReadOnlyList<string>)entry.Value
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                StringComparer.Ordinal)
         };
     }
 
-    private static string ResolveModuleRoot(string inputPath)
+    private static List<XmlSourceDocument> LoadLanguageXmlDocuments(string moduleRoot, string? preferredFolderCode)
     {
-        if (!Directory.Exists(inputPath))
+        var documents = new List<XmlSourceDocument>();
+        var languageRoot = Path.Combine(moduleRoot, "ModuleData", "Languages");
+        if (!Directory.Exists(languageRoot))
         {
-            throw new DirectoryNotFoundException($"未找到 Mod 路径：{inputPath}");
+            return documents;
         }
 
-        if (File.Exists(Path.Combine(inputPath, "SubModule.xml")))
+        var preferredSegment = string.IsNullOrWhiteSpace(preferredFolderCode)
+            ? null
+            : $"/languages/{preferredFolderCode.Trim().Replace('\\', '/').ToLowerInvariant()}/";
+
+        foreach (var xmlPath in Directory.EnumerateFiles(languageRoot, "*.xml", SearchOption.AllDirectories))
         {
-            return inputPath;
+            var fileName = Path.GetFileName(xmlPath);
+            if (fileName.Equals("language_data.xml", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var normalized = xmlPath.Replace('\\', '/').ToLowerInvariant();
+            if (normalized.Contains("/languages/_template/") || normalized.Contains("/languages/_templates/"))
+            {
+                continue;
+            }
+
+            if (preferredSegment is not null && normalized.Contains(preferredSegment))
+            {
+                continue;
+            }
+
+            try
+            {
+                var document = XDocument.Load(xmlPath, LoadOptions.PreserveWhitespace);
+                documents.Add(new XmlSourceDocument
+                {
+                    RelativePath = ToRelativePath(moduleRoot, xmlPath),
+                    Document = document
+                });
+            }
+            catch
+            {
+                // 单文件损坏不应中断整体扫描。
+            }
         }
 
-        var children = Directory
-            .EnumerateDirectories(inputPath)
-            .Where(directory => File.Exists(Path.Combine(directory, "SubModule.xml")))
-            .ToArray();
-        if (children.Length == 1)
+        return documents;
+    }
+
+    private static XmlSourceDocument? SelectPrimaryLanguageDocument(IReadOnlyList<XmlSourceDocument> documents)
+    {
+        if (documents.Count == 0)
         {
-            return children[0];
+            return null;
         }
 
-        throw new InvalidOperationException($"无法定位唯一 Mod 根目录：{inputPath}");
+        var preferred = documents
+            .Where(doc =>
+            {
+                var name = Path.GetFileName(doc.RelativePath);
+                return name.Contains("strings", StringComparison.OrdinalIgnoreCase) ||
+                       name.Contains("std_module_strings", StringComparison.OrdinalIgnoreCase);
+            })
+            .OrderBy(doc => doc.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+
+        return preferred ?? documents.OrderBy(doc => doc.RelativePath, StringComparer.OrdinalIgnoreCase).First();
     }
 
     private static XmlSourceDocument LoadOrCreateCanonicalLanguageDocument(string moduleRoot)
@@ -140,7 +238,11 @@ public sealed class ModTextExtractor
         }
     }
 
-    private static void CollectTranslationIdReferencesFromXmlAndJson(string moduleRoot, IDictionary<string, string> references)
+    private static void CollectTranslationIdReferencesFromXmlAndJson(
+        string moduleRoot,
+        IDictionary<string, string> references,
+        IDictionary<string, HashSet<string>> idSources,
+        IReadOnlySet<string> existingIds)
     {
         var files = Directory
             .EnumerateFiles(moduleRoot, "*.*", SearchOption.AllDirectories)
@@ -167,27 +269,33 @@ public sealed class ModTextExtractor
             var extension = Path.GetExtension(file).ToLowerInvariant();
             if (extension == ".xml")
             {
-                TryCollectFromXml(file, references);
+                TryCollectFromXml(moduleRoot, file, references, idSources, existingIds);
                 continue;
             }
 
             if (extension == ".json")
             {
-                TryCollectFromJson(file, references);
+                TryCollectFromJson(moduleRoot, file, references, idSources, existingIds);
             }
         }
     }
 
-    private static void TryCollectFromXml(string filePath, IDictionary<string, string> references)
+    private static void TryCollectFromXml(
+        string moduleRoot,
+        string filePath,
+        IDictionary<string, string> references,
+        IDictionary<string, HashSet<string>> idSources,
+        IReadOnlySet<string> existingIds)
     {
         try
         {
             var document = XDocument.Load(filePath, LoadOptions.PreserveWhitespace);
+            var relative = ToRelativePath(moduleRoot, filePath);
             foreach (var element in document.Descendants())
             {
                 foreach (var attribute in element.Attributes())
                 {
-                    TryAddReference(references, attribute.Value);
+                    TryAddReference(references, idSources, attribute.Value, relative, existingIds);
                 }
 
                 if (element.HasElements)
@@ -195,7 +303,7 @@ public sealed class ModTextExtractor
                     continue;
                 }
 
-                TryAddReference(references, element.Value);
+                TryAddReference(references, idSources, element.Value, relative, existingIds);
             }
         }
         catch
@@ -204,7 +312,12 @@ public sealed class ModTextExtractor
         }
     }
 
-    private static void TryCollectFromJson(string filePath, IDictionary<string, string> references)
+    private static void TryCollectFromJson(
+        string moduleRoot,
+        string filePath,
+        IDictionary<string, string> references,
+        IDictionary<string, HashSet<string>> idSources,
+        IReadOnlySet<string> existingIds)
     {
         try
         {
@@ -214,7 +327,8 @@ public sealed class ModTextExtractor
                 return;
             }
 
-            WalkJsonForReferences(root, references);
+            var relative = ToRelativePath(moduleRoot, filePath);
+            WalkJsonForReferences(root, references, idSources, relative, existingIds);
         }
         catch
         {
@@ -222,7 +336,12 @@ public sealed class ModTextExtractor
         }
     }
 
-    private static void WalkJsonForReferences(JsonNode node, IDictionary<string, string> references)
+    private static void WalkJsonForReferences(
+        JsonNode node,
+        IDictionary<string, string> references,
+        IDictionary<string, HashSet<string>> idSources,
+        string relativeFile,
+        IReadOnlySet<string> existingIds)
     {
         switch (node)
         {
@@ -234,7 +353,7 @@ public sealed class ModTextExtractor
                         continue;
                     }
 
-                    WalkJsonForReferences(entry.Value, references);
+                    WalkJsonForReferences(entry.Value, references, idSources, relativeFile, existingIds);
                 }
                 break;
             case JsonArray jsonArray:
@@ -245,19 +364,24 @@ public sealed class ModTextExtractor
                         continue;
                     }
 
-                    WalkJsonForReferences(child, references);
+                    WalkJsonForReferences(child, references, idSources, relativeFile, existingIds);
                 }
                 break;
             case JsonValue jsonValue:
                 if (jsonValue.TryGetValue<string>(out var value) && !string.IsNullOrWhiteSpace(value))
                 {
-                    TryAddReference(references, value);
+                    TryAddReference(references, idSources, value, relativeFile, existingIds);
                 }
                 break;
         }
     }
 
-    private static void TryAddReference(IDictionary<string, string> references, string rawValue)
+    private static void TryAddReference(
+        IDictionary<string, string> references,
+        IDictionary<string, HashSet<string>> idSources,
+        string rawValue,
+        string relativeFile,
+        IReadOnlySet<string> existingIds)
     {
         if (string.IsNullOrWhiteSpace(rawValue) || !rawValue.Contains("{=", StringComparison.Ordinal))
         {
@@ -267,6 +391,13 @@ public sealed class ModTextExtractor
         var normalized = TextEncodingNormalizer.NormalizeMojibake(rawValue.Trim());
         var id = TextRules.ExtractTranslationId(normalized);
         if (string.IsNullOrWhiteSpace(id))
+        {
+            return;
+        }
+
+        RegisterIdSource(idSources, id, relativeFile);
+
+        if (existingIds.Contains(id))
         {
             return;
         }
@@ -303,6 +434,7 @@ public sealed class ModTextExtractor
             return;
         }
 
+        EnsureLanguageDocumentShape(languageDocument);
         var root = languageDocument.Root;
         if (root is null)
         {
@@ -336,6 +468,35 @@ public sealed class ModTextExtractor
                 new XAttribute("id", id),
                 new XAttribute("text", defaultText)));
             existing.Add(id);
+        }
+    }
+
+    private static void RegisterIdSource(IDictionary<string, HashSet<string>> idSources, string id, string sourceFile)
+    {
+        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(sourceFile))
+        {
+            return;
+        }
+
+        if (!idSources.TryGetValue(id, out var set))
+        {
+            set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            idSources[id] = set;
+        }
+
+        set.Add(sourceFile);
+    }
+
+    private static string ToRelativePath(string moduleRoot, string filePath)
+    {
+        try
+        {
+            var relative = Path.GetRelativePath(moduleRoot, filePath);
+            return relative.Replace('\\', Path.DirectorySeparatorChar);
+        }
+        catch
+        {
+            return filePath;
         }
     }
 

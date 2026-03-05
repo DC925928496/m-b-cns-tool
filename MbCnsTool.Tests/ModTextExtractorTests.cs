@@ -51,7 +51,7 @@ public sealed class ModTextExtractorTests
 
         try
         {
-            var extractor = new ModTextExtractor(new TextClassifier(), new DllStringScanner());
+            var extractor = new ModTextExtractor(new TextClassifier(), new TextObjectLiteralScanner());
             var bundle = extractor.Extract(root);
 
             Assert.Equal(moduleRoot, bundle.ModuleRootPath);
@@ -89,7 +89,7 @@ public sealed class ModTextExtractorTests
 
         try
         {
-            var extractor = new ModTextExtractor(new TextClassifier(), new DllStringScanner());
+            var extractor = new ModTextExtractor(new TextClassifier(), new TextObjectLiteralScanner());
             var bundle = extractor.Extract(root);
 
             Assert.Empty(bundle.DllLiterals);
@@ -123,7 +123,7 @@ public sealed class ModTextExtractorTests
 
         try
         {
-            var extractor = new ModTextExtractor(new TextClassifier(), new DllStringScanner());
+            var extractor = new ModTextExtractor(new TextClassifier(), new TextObjectLiteralScanner());
             var bundle = extractor.Extract(root);
             Assert.Contains(bundle.TextUnits, unit => unit.TranslationId == "dismiss_tip" && unit.SourceText == "— Dismiss Soldiers —");
         }
@@ -137,12 +137,34 @@ public sealed class ModTextExtractorTests
     }
 
     [Fact]
-    public async Task Extract_Strict_Should_Only_Scan_Dlls_Declared_In_SubModule_And_Collect_TranslationId()
+    public async Task Extract_Strict_Should_Scan_TextObject_Literals_And_Deduplicate_Existing_Ids()
     {
         var root = Path.Combine(Path.GetTempPath(), $"mod-{Guid.NewGuid():N}");
         var moduleRoot = Path.Combine(root, "DemoMod");
         Directory.CreateDirectory(moduleRoot);
-        Directory.CreateDirectory(Path.Combine(moduleRoot, "ModuleData"));
+        var languageRoot = Path.Combine(moduleRoot, "ModuleData", "Languages");
+        var cnsRoot = Path.Combine(languageRoot, "CNs");
+        Directory.CreateDirectory(cnsRoot);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(languageRoot, "language_data.xml"),
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <LanguageData id="简体中文">
+              <LanguageFile xml_path="CNs/std_module_strings_CNs.xml" />
+            </LanguageData>
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(cnsRoot, "std_module_strings_CNs.xml"),
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <base type="string">
+              <strings>
+                <string id="exists" text="已存在" />
+              </strings>
+            </base>
+            """);
 
         await File.WriteAllTextAsync(
             Path.Combine(moduleRoot, "SubModule.xml"),
@@ -162,17 +184,20 @@ public sealed class ModTextExtractorTests
         Directory.CreateDirectory(binRoot);
         var declaredDllPath = Path.Combine(binRoot, "DemoMod.dll");
         var otherDllPath = Path.Combine(binRoot, "NotReferenced.dll");
-        CreateDllWithStringLiteral(declaredDllPath, "{=dll_id}Hello From Dll");
-        CreateDllWithStringLiteral(otherDllPath, "{=other_id}Other");
+        CreateDllWithTextObjectCtorCalls(declaredDllPath, "{=exists}Hello Exists", "{=dll_id}Hello From Dll", "Hardcoded");
+        CreateDllWithTextObjectCtorCalls(otherDllPath, "{=other_id}Other", "OtherHardcoded");
 
         try
         {
-            var extractor = new ModTextExtractor(new TextClassifier(), new DllStringScanner());
+            var extractor = new ModTextExtractor(new TextClassifier(), new TextObjectLiteralScanner());
             var bundle = extractor.Extract(root);
 
-            Assert.Empty(bundle.DllLiterals);
             Assert.Contains(bundle.TextUnits, unit => unit.TranslationId == "dll_id" && unit.SourceText == "Hello From Dll");
+            Assert.DoesNotContain(bundle.TextUnits, unit => unit.TranslationId == "exists");
             Assert.DoesNotContain(bundle.TextUnits, unit => unit.TranslationId == "other_id");
+
+            Assert.Contains(bundle.DllLiterals, literal => literal.SourceText == "Hardcoded" && literal.AssemblyName == "DemoMod.dll");
+            Assert.DoesNotContain(bundle.DllLiterals, literal => literal.SourceText == "OtherHardcoded");
         }
         finally
         {
@@ -183,28 +208,48 @@ public sealed class ModTextExtractorTests
         }
     }
 
-    private static void CreateDllWithStringLiteral(string dllPath, string literal)
+    private static void CreateDllWithTextObjectCtorCalls(string dllPath, params string[] literals)
     {
         var assemblyName = new AssemblyNameDefinition(Path.GetFileNameWithoutExtension(dllPath), new Version(1, 0, 0, 0));
         var assembly = AssemblyDefinition.CreateAssembly(assemblyName, assemblyName.Name, ModuleKind.Dll);
         var module = assembly.MainModule;
 
-        var type = new TypeDefinition(
+        var textObjectType = new TypeDefinition(
+            "TaleWorlds.Localization",
+            "TextObject",
+            TypeAttributes.Public | TypeAttributes.Class,
+            module.TypeSystem.Object);
+        module.Types.Add(textObjectType);
+
+        var ctor = new MethodDefinition(
+            ".ctor",
+            MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
+            module.TypeSystem.Void);
+        ctor.Parameters.Add(new ParameterDefinition("value", ParameterAttributes.None, module.TypeSystem.String));
+        textObjectType.Methods.Add(ctor);
+        var ctorIl = ctor.Body.GetILProcessor();
+        ctorIl.Append(ctorIl.Create(OpCodes.Ret));
+
+        var demoType = new TypeDefinition(
             "Demo",
             "TestType",
             TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed,
             module.TypeSystem.Object);
-        module.Types.Add(type);
+        module.Types.Add(demoType);
 
         var method = new MethodDefinition(
             "Touch",
             MethodAttributes.Public | MethodAttributes.Static,
             module.TypeSystem.Void);
-        type.Methods.Add(method);
+        demoType.Methods.Add(method);
 
         var il = method.Body.GetILProcessor();
-        il.Append(il.Create(OpCodes.Ldstr, literal));
-        il.Append(il.Create(OpCodes.Pop));
+        foreach (var literal in literals)
+        {
+            il.Append(il.Create(OpCodes.Ldstr, literal));
+            il.Append(il.Create(OpCodes.Newobj, ctor));
+            il.Append(il.Create(OpCodes.Pop));
+        }
         il.Append(il.Create(OpCodes.Ret));
 
         assembly.Write(dllPath);

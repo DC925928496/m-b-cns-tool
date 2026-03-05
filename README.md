@@ -1,137 +1,105 @@
-# m&b-cns-tool
+# m-b-cns-tool
 
-用于 `Mount & Blade II: Bannerlord` Mod 的 Windows 汉化生成工具。
+`Mount & Blade II: Bannerlord` Mod 汉化工具（WPF + CLI）。
 
-## 功能概览
+## 核心流程（与骑砍2本地化规范对齐）
 
-- 翻译引擎仅保留两种：`谷歌免费接口` 与 `自定义 OpenAI 兼容接口`。
-- 自定义接口失败时自动回退到谷歌免费接口，保证流程不中断。
-- 网络请求内置增强重试（429/5xx/超时/SSL），降低偶发网络错误影响。
-- 自动识别文本类型（对话、物品、菜单、系统），按类型走翻译策略。
-- 自动保护变量占位符（如 `{PLAYER_NAME}`、`<RANK>`）。
-- 支持术语表统一（如 `Denar=第纳尔`）。
-- 流程改为两阶段：先翻译并生成 `translation_review.json`，人工确认后再执行最终打包。
-- GUI 提供翻译对比可视化编辑窗口，可直接修改缓存译文。
-- 支持从 XML/JSON/DLL 中收集 `{=id}` 本地化引用，并自动补全到 `std_module_strings_xml.xml`（严格按骑砍2本地化规范）。
-- 文本翻译支持受控并发，默认并发数为 `6`。
-- 支持两种输出模式：
-  - `external`：生成独立 `*_CNs` 汉化包。
-  - `overlay`：直接覆盖原 Mod 文件。
-- `external` 模式会优先生成 `Language-CNs` 语言包（接口文本），并将无接口文本输出为同路径 `*.xslt` 补丁，避免无差别整包覆盖。
-- 内置 SQLite 缓存，重复文本不重复翻译。
+1. 选择需要汉化的 Mod 根目录（可传父目录，工具会自动定位 `SubModule.xml` 所在模块根）
+2. 可选：扫描 DLL（严格限定为 `TextObject` 构造函数首参为字符串字面量的场景）
+3. 扫描并生成“工程记录”（JSON）：按 **所属文件 / id / text / 译文** 展示与编辑
+4. “开始翻译”：使用谷歌翻译填充空译文（并强制占位符安全校验）
+5. 人工校对并保存工程记录
+6. “打包”：生成依赖原 Mod 的外挂汉化 Mod（外置包），必要时包含运行时注入 DLL
+7. 再次处理同一 Mod：优先复用已保存的工程记录
 
-## 目录结构
+## 关键特性
 
-- `MbCnsTool.Core`：核心流程与翻译引擎。
-- `MbCnsTool.Cli`：命令行入口。
-- `MbCnsTool.Wpf`：Windows 图形界面入口。
-- `MbCnsTool.Tests`：单元测试。
-- `glossary/default_glossary.txt`：默认术语表示例。
-- `artifacts/`：运行与发布产物目录（默认不提交仓库）。
+- 语言文件扫描：遍历 `ModuleData/Languages/` 下全部 `*.xml`，并优先使用目标语言目录（如 `CNs`）的 `language_data.xml` 定义。
+- DLL 扫描：只收集 `new TextObject("...")` 这类字符串字面量；`{=id}` 若已在语言 XML 中存在对应 `<string id="id">` 则去重不入列表。
+- 硬编码文本：进入“运行时注入”路径，生成 `runtime_localization.json`（数组结构，带 `sourceTextBase64`，兼容换行/转义差异）。
+- 严格安全优先：
+  - 占位符 `{...}` / `{{...}}` / `<...>` / `%...%` 必须保持一致，不安全译文会被回退/忽略；
+  - 运行时注入带版本门禁：无法判定版本或不在允许范围时，注入完全禁用（不崩溃、不修改入参）。
 
-## 手工构建
+## 项目结构
+
+- `MbCnsTool.Core/`：核心流程（扫描、翻译编排、打包、记录）
+- `MbCnsTool.Cli/`：命令行入口（`scan/translate/package`）
+- `MbCnsTool.Wpf/`：Windows 图形界面入口（DataGrid 内联校对）
+- `MbCnsTool.RuntimeLocalization/`：运行时注入子模块（Harmony + 版本门禁）
+- `MbCnsTool.Tests/`：xUnit 单元测试
+- `glossary/`：默认术语表
+- `artifacts/`：本地运行与发布产物（不提交）
+
+## 手工构建与测试
 
 ```powershell
 dotnet build MbCnsTool.sln -c Release
 dotnet test MbCnsTool.sln -c Release --no-build
-dotnet publish MbCnsTool.Cli\MbCnsTool.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts\publish
-dotnet publish MbCnsTool.Wpf\MbCnsTool.Wpf.csproj -c Release -r win-x64 --self-contained false -o artifacts\publish-wpf
 ```
 
-## 便携包发布（方案1）
+## CLI 用法
 
 ```powershell
-dotnet build MbCnsTool.sln -c Release
-dotnet publish MbCnsTool.Wpf\MbCnsTool.Wpf.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:DebugType=None -p:DebugSymbols=false -o artifacts\publish-wpf-portable
-Compress-Archive -Path artifacts\publish-wpf-portable\* -DestinationPath artifacts\MbCnsTool.Wpf-win-x64-portable.zip -Force
+# 1) 扫描：生成/更新工程记录
+dotnet run --project MbCnsTool.Cli/MbCnsTool.Cli.csproj -c Release -- `
+  scan --mod "D:\Bannerlord\Modules\SomeMod" --scan-dll true
+
+# 2) 机翻：填充空译文，并写回工程记录
+dotnet run --project MbCnsTool.Cli/MbCnsTool.Cli.csproj -c Release -- `
+  translate --mod "D:\Bannerlord\Modules\SomeMod" --scan-dll true
+
+# 3) 打包：读取工程记录 + 缓存，生成外挂汉化 Mod
+dotnet run --project MbCnsTool.Cli/MbCnsTool.Cli.csproj -c Release -- `
+  package --mod "D:\Bannerlord\Modules\SomeMod" --mode external --scan-dll true
 ```
 
-- 对外分发文件：`artifacts/MbCnsTool.Wpf-win-x64-portable.zip`
-- 用户使用方式：解压后直接运行 `MbCnsTool.Wpf.exe`
+常用参数：
 
-## 仓库清理
+- `--mod`：Mod 路径（模块根或其父目录）
+- `--output`：外挂汉化 Mod 输出目录（仅 `package --mode external` 使用；默认输出到原 Mod 同级目录）
+- `--scan-dll`：是否扫描 DLL（默认 `false`）
+- `--project`：工程记录路径（默认：`<工具目录>/data/records/<模块名>.mbcns_project.json`）
+- `--cache`：缓存数据库路径（默认：`<工具目录>/data/cache/translation_cache.db`）
+- `--mode`：`external` 或 `overlay`（注意：`overlay` 不支持运行时注入条目）
+
+持久化数据说明：
+
+- 工程记录与缓存默认持久化在工具运行目录（`AppContext.BaseDirectory`）下的 `data/` 目录，与 `--output` 无关。
+
+## WPF 用法
+
+发布/运行（示例）：
 
 ```powershell
-dotnet clean MbCnsTool.sln
+dotnet publish MbCnsTool.Wpf/MbCnsTool.Wpf.csproj -c Release -r win-x64 --self-contained false -o artifacts/publish-wpf
+artifacts/publish-wpf/MbCnsTool.Wpf.exe
 ```
 
-- 运行/发布生成目录（如 `artifacts/`、各项目 `bin/`、`obj/`）已加入 `.gitignore`。
+界面流程：
 
-## 运行示例
+- 选择 Mod 根目录（外挂汉化包输出目录会自动填充为“原 Mod 同级”，也可手工自定义）
+- 勾选是否扫描 DLL
+- 点击“扫描”加载条目到表格
+- 点击“开始翻译”自动填充空译文
+- 在表格中直接编辑“译文”，点击“保存记录”
+- 点击“打包”生成外挂汉化 Mod
 
-```powershell
-# 第一步：翻译并生成可编辑对比文件（不打包）
-dotnet run --project MbCnsTool.Cli\MbCnsTool.Cli.csproj -c Release -- `
-  --mod "D:\Bannerlord\Modules\Enlisted" `
-  --output ".\artifacts" `
-  --mode external `
-  --style "史诗叙事风" `
-  --providers google_free,fallback `
-  --glossary ".\glossary\default_glossary.txt"
+DLL 扫描提示：
 
-# 第二步：手动确认对比文件后执行最终打包
-dotnet run --project MbCnsTool.Cli\MbCnsTool.Cli.csproj -c Release -- `
-  --mod "D:\Bannerlord\Modules\Enlisted" `
-  --output ".\artifacts" `
-  --mode external `
-  --style "史诗叙事风" `
-  --providers google_free,fallback `
-  --glossary ".\glossary\default_glossary.txt" `
-  --finalize true
-```
+- 必须确保 Mod 目录下存在 `bin/**/<DLLName>.dll`（`<DLLName>` 来自 `SubModule.xml` 的 `<DLLName value="..."/>`）。
+- 若你选择的是源码仓库/未编译版本，通常没有 `bin/`，扫描会提示“未找到目录/未找到声明 DLL”，并返回 `DLL 字面量 0`（属正常行为）。
 
-## 参数说明
+## 运行时注入 DLL 的放置
 
-- `--mod`：Mod 路径（可传父目录，工具会自动定位 `SubModule.xml`）。
-- `--output`：输出根目录，默认 `./artifacts`。
-- `--mode`：`external` 或 `overlay`。
-- `--style`：翻译风格，例如 `官方直译`、`武侠风`、`史诗叙事风`。
-- `--providers`：翻译链路，默认 `google_free,fallback`。
-- `--concurrency`：翻译并发数，默认 `6`，建议范围 `1-32`。
-- `--glossary`：术语表文件路径。
-- `--cache`：缓存数据库路径，默认 `artifacts/cache/translation_cache.db`。
-- `--review`：翻译对比文件路径（JSON），默认 `artifacts/review/<模块名>.translation_review.json`。
-- `--finalize`：`true/false`，`true` 表示执行最终打包阶段；默认不打包，仅生成翻译对比数据。
-- `--target`：目标语言，默认 `zh-CN`。
+工具在打包时需要复制 `MbCnsTool.RuntimeLocalization.dll` 与 `0Harmony.dll` 到外挂包的 `bin/Win64_Shipping_Client/`。
 
-## 开源协议
+默认查找顺序：
 
-本项目采用 `MIT License` 开源协议。
+1. 环境变量 `MBCNS_RUNTIME_INJECTOR_DIR` 指向的目录（若设置）
+2. 工具运行目录（`AppContext.BaseDirectory`）及其 `runtime_injector/` 子目录
+3. 源码构建目录的 `MbCnsTool.RuntimeLocalization/bin/(Release|Debug)/net472/`（便于从源码运行）
 
 ## 迁移策略
 
 无迁移，直接替换。
-
-## GUI 启动（具体用法）
-
-- 环境要求：Windows（使用便携包方案时无需额外安装 .NET Runtime）。
-
-- 第一次使用（推荐）：
-
-```powershell
-dotnet build MbCnsTool.sln -c Release
-dotnet publish MbCnsTool.Wpf\MbCnsTool.Wpf.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:DebugType=None -p:DebugSymbols=false -o artifacts\publish-wpf-portable
-```
-
-- 启动方式（命令行）：
-
-```powershell
-artifacts\publish-wpf-portable\MbCnsTool.Wpf.exe
-```
-
-## GUI 说明（当前版本）
-
-- 界面采用极简风布局，分为参数区、四段进度区、日志区。
-- 主窗口支持自适应拉伸（含最小尺寸约束），日志区会随窗口放大。
-- 固定路径：
-  - 术语表：`glossary/default_glossary.txt`
-  - 缓存：`artifacts/cache/translation_cache.db`
-- 目标语言固定为简体中文，不在界面展示。
-- 输出模式使用中文选项与解释文案。
-- 翻译引擎下拉仅保留 `谷歌免费接口` 与 `自定义 AI`。
-- 支持在界面设置并发数（`1-32`，默认 `6`）。
-- 自定义 AI 失败自动回退谷歌接口。
-- 点击“开始翻译”后，先执行 `扫描/文本翻译` 并生成翻译对比文件。
-- 可通过“编辑翻译对比”可视化修改译文，保存后自动写回缓存。
-- 确认无误后点击“最终打包”执行最后一步。
-- 默认翻译风格提示词为：`请用骑马与砍杀2的中世纪风格进行翻译`。
